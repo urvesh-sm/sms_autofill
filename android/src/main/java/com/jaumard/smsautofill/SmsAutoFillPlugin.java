@@ -11,12 +11,16 @@ import android.content.IntentSender;
 import android.os.Build;
 import android.os.Bundle;
 import android.telephony.TelephonyManager;
+import android.util.Log;
 
 import com.google.android.gms.auth.api.Auth;
 import com.google.android.gms.auth.api.credentials.Credential;
 import com.google.android.gms.auth.api.credentials.HintRequest;
+import com.google.android.gms.auth.api.identity.GetPhoneNumberHintIntentRequest;
+import com.google.android.gms.auth.api.identity.Identity;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.Status;
@@ -51,6 +55,8 @@ public class SmsAutoFillPlugin implements FlutterPlugin, ActivityAware, MethodCa
     private static final int PHONE_HINT_REQUEST = 11012;
     private static final String channelName = "sms_autofill";
 
+    public static final String TAG = SmsAutoFillPlugin.class.getSimpleName();
+
     private Activity activity;
     private Result pendingHintResult;
     private MethodChannel channel;
@@ -60,11 +66,10 @@ public class SmsAutoFillPlugin implements FlutterPlugin, ActivityAware, MethodCa
         @Override
         public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
             if (requestCode == SmsAutoFillPlugin.PHONE_HINT_REQUEST && pendingHintResult != null) {
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    Credential credential = data.getParcelableExtra(Credential.EXTRA_KEY);
-                    final String phoneNumber = credential.getId();
+                try {
+                    String phoneNumber = Identity.getSignInClient(activity).getPhoneNumberFromIntent(data);
                     pendingHintResult.success(phoneNumber);
-                } else {
+                } catch (ApiException e) {
                     pendingHintResult.success(null);
                 }
                 return true;
@@ -149,20 +154,33 @@ public class SmsAutoFillPlugin implements FlutterPlugin, ActivityAware, MethodCa
             return;
         }
 
-        HintRequest hintRequest = new HintRequest.Builder()
-                .setPhoneNumberIdentifierSupported(true)
-                .build();
-        GoogleApiClient mCredentialsClient = new GoogleApiClient.Builder(activity)
-                .addApi(Auth.CREDENTIALS_API)
-                .build();
-        PendingIntent intent = Auth.CredentialsApi.getHintPickerIntent(
-                mCredentialsClient, hintRequest);
-        try {
-            activity.startIntentSenderForResult(intent.getIntentSender(),
-                    SmsAutoFillPlugin.PHONE_HINT_REQUEST, null, 0, 0, 0);
-        } catch (IntentSender.SendIntentException e) {
-            e.printStackTrace();
-        }
+        GetPhoneNumberHintIntentRequest request = GetPhoneNumberHintIntentRequest.builder().build();
+        Identity.getSignInClient(activity)
+                .getPhoneNumberHintIntent(request)
+                .addOnSuccessListener(new OnSuccessListener<PendingIntent>() {
+                    @Override
+                    public void onSuccess(PendingIntent result) {
+                        try {
+                            activity.startIntentSenderForResult(result.getIntentSender(),
+                                    SmsAutoFillPlugin.PHONE_HINT_REQUEST, null, 0, 0, 0);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Launching the PendingIntent failed", e);
+                            if (pendingHintResult != null) {
+                                pendingHintResult.success(null);
+                            }
+                        }
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Log.e(TAG, "Phone Number Hint failed", e);
+                        if (pendingHintResult != null) {
+                            pendingHintResult.success(null);
+                        }
+                    }
+                });
+
     }
 
     public boolean isSimSupport() {
